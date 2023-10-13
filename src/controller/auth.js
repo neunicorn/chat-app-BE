@@ -1,11 +1,13 @@
 require("dotenv").config();
 const User = require("../models/User");
 const bcrypt = require("bcrypt");
+const jwt = require("jsonwebtoken");
 
 const generateAccesToken = async (payload) => {
   return jwt.sign(
     {
-      id: payload,
+      id: payload.id,
+      username: payload.username,
     },
     process.env.ACCESS_JWT_TOKEN_SECRET
   );
@@ -16,33 +18,64 @@ class AuthController {
     try {
       const { username, password } = req.body;
 
-      let usernameAlreadyExist = await UserModel.getOneUser(
-        "username",
-        username
-      );
-      if (usernameAlreadyExist) {
+      let usernameAlreadyExist = await User.find({ username }).exec();
+      console.log("FAK", usernameAlreadyExist);
+
+      if (usernameAlreadyExist.length > 0) {
         throw { code: 400, message: "USERNAME_ALREADY_EXIST" };
       }
 
       const salt = await bcrypt.genSalt(10);
       const hashedPassword = await bcrypt.hash(password, salt);
-      let newUser = {
+
+      let user = new User({
         username,
         password: hashedPassword,
-      };
-      let user = await User.create(newUser);
-      if (!user) {
-        throw { code: 500, message: "INTERNAL_SERVER_ERROR" };
-      }
+      });
+      let saveUser = await user.save();
+      const token = await generateAccesToken({ id: saveUser._id, username });
 
-      const token = await generateAccesToken(user._id);
-
-      return res.cookie(token).status(201).json({
+      return res.status(201).json({
         status: true,
         message: "USER_CREATED",
+        token,
       });
     } catch (err) {
-      return res.status(err.code).json({
+      return res.status(err.code || 500).json({
+        status: false,
+        message: err.message,
+      });
+    }
+  }
+  async login(req, res) {
+    try {
+      const { username, password } = req.body;
+      const [checkUser, _] = await User.find({ username }).exec();
+      if (!checkUser) {
+        throw { code: 404, message: "User not Found" };
+      }
+
+      const isPasswordValid = await bcrypt.compareSync(
+        password,
+        checkUser.password
+      );
+
+      if (!isPasswordValid) {
+        throw { code: 400, message: "PASSWORD_INVALID" };
+      }
+      const token = await generateAccesToken({ id: checkUser._id, username });
+
+      return res
+        .cookie("token", token, { sameSite: "none", secure: true })
+        .status(200)
+        .json({
+          status: true,
+          message: "LOGIN_SUCCESS",
+          username: username,
+          token,
+        });
+    } catch (err) {
+      return res.status(err.code || 500).json({
         status: false,
         message: err.message,
       });
